@@ -78,6 +78,7 @@ func ensureProxy(ns *inet.Namespace) {
 		srv := &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				vlog("HTTP %s %s%s", r.Method, r.Host, r.URL)
+				injectSecret(r)
 				proxy.ServeHTTP(w, r)
 			}),
 			TLSConfig: &tls.Config{
@@ -253,3 +254,18 @@ type pipeAddr struct{}
 
 func (pipeAddr) Network() string { return "pipe" }
 func (pipeAddr) String() string  { return "pipe" }
+
+// injectSecret replaces the fake placeholder in the Authorization: Bearer
+// header with the real secret for requests matching a configured secret URL.
+func injectSecret(r *http.Request) {
+	s := findSecretForHost(r.Host)
+	if s == nil {
+		return
+	}
+
+	auth := r.Header.Get("Authorization")
+	if auth == "Bearer "+s.Fake {
+		r.Header.Set("Authorization", "Bearer "+s.Real)
+		vlog("secret: injected %s for %s", s.Name, r.Host)
+	}
+}
