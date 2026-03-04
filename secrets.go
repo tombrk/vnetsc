@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,11 +16,11 @@ const secretAnnotationPrefix = "vnetsc.test/secrets/"
 // Secret describes a secret to inject into HTTP requests.
 type Secret struct {
 	Name string // e.g. "anthropic"
-	URL  string // e.g. "https://api.anthropic.com"
-	Env  string // env var name, e.g. "ANTHROPIC_API_KEY"
-	Fake string // placeholder value set in the container env
-	Real string // real secret value
-	Type string // e.g. "bearer"
+	URL  string // e.g. "https://api.anthropic.com" or "https://github.com/user/repo" for git
+	Env  string // env var name, e.g. "ANTHROPIC_API_KEY" (not used for type=git)
+	Fake string // placeholder value set in the container env (not used for type=git)
+	Real string // real secret value / PAT
+	Type string // "bearer" or "git"
 }
 
 // secrets is populated during init() from OCI annotations.
@@ -165,6 +166,7 @@ func truncate(b []byte, n int) string {
 // parseSecretAnnotation parses a value like:
 //
 //	url=https://api.anthropic.com env=ANTHROPIC_API_KEY value=sk-xxx type=bearer
+//	url=https://github.com/user/repo value=ghp_xxx type=git user=x-access-token
 func parseSecretAnnotation(name, raw string) (Secret, error) {
 	s := Secret{Name: name}
 	fields := strings.Fields(raw)
@@ -186,21 +188,32 @@ func parseSecretAnnotation(name, raw string) (Secret, error) {
 			return s, fmt.Errorf("unknown field %q", k)
 		}
 	}
-	if s.URL == "" || s.Env == "" || s.Real == "" {
-		return s, fmt.Errorf("url, env, and value are required")
-	}
 	if s.Type == "" {
 		s.Type = "bearer"
 	}
-	// Generate a deterministic fake value.
-	s.Fake = "vnetsc-placeholder-" + s.Name
+	switch s.Type {
+	case "bearer":
+		if s.URL == "" || s.Env == "" || s.Real == "" {
+			return s, fmt.Errorf("url, env, and value are required for type=bearer")
+		}
+		s.Fake = "vnetsc-placeholder-" + s.Name
+	case "git":
+		if s.URL == "" || s.Real == "" {
+			return s, fmt.Errorf("url and value are required for type=git")
+		}
+	default:
+		return s, fmt.Errorf("unknown type %q", s.Type)
+	}
 	return s, nil
 }
 
-// findSecretForHost returns the secret matching the given host (from URL), or nil.
+// findSecretForHost returns the bearer secret matching the given host, or nil.
 func findSecretForHost(host string) *Secret {
 	for i := range secrets {
 		s := &secrets[i]
+		if s.Type != "bearer" {
+			continue
+		}
 		// Extract host from the secret's URL.
 		u := s.URL
 		u = strings.TrimPrefix(u, "https://")
@@ -213,4 +226,32 @@ func findSecretForHost(host string) *Secret {
 		}
 	}
 	return nil
+}
+
+// findGitSecret returns the git secret whose URL is a prefix of the
+// request's host+path, or nil.
+func findGitSecret(host, path string) *Secret {
+	// Reconstruct the full request URL path for prefix matching.
+	h := strings.Split(host, ":")[0]
+	reqPath := h + path
+	for i := range secrets {
+		s := &secrets[i]
+		if s.Type != "git" {
+			continue
+		}
+		u := s.URL
+		u = strings.TrimPrefix(u, "https://")
+		u = strings.TrimPrefix(u, "http://")
+		u = strings.TrimSuffix(u, "/")
+		// e.g. u = "github.com/user/repo", reqPath = "github.com/user/repo.git/info/refs"
+		if strings.HasPrefix(reqPath, u) {
+			return s
+		}
+	}
+	return nil
+}
+
+// gitBasicAuth returns the Basic auth header value for a git secret.
+func gitBasicAuth(s *Secret) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+s.Real))
 }

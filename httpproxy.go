@@ -255,17 +255,23 @@ type pipeAddr struct{}
 func (pipeAddr) Network() string { return "pipe" }
 func (pipeAddr) String() string  { return "pipe" }
 
-// injectSecret replaces the fake placeholder in the Authorization: Bearer
-// header with the real secret for requests matching a configured secret URL.
+// injectSecret replaces credentials in outbound HTTP requests based on
+// configured secrets. For type=bearer, it swaps the placeholder token.
+// For type=git, it unconditionally injects Basic auth with the PAT.
 func injectSecret(r *http.Request) {
-	s := findSecretForHost(r.Host)
-	if s == nil {
-		return
+	// Try bearer first.
+	if s := findSecretForHost(r.Host); s != nil {
+		auth := r.Header.Get("Authorization")
+		if auth == "Bearer "+s.Fake {
+			r.Header.Set("Authorization", "Bearer "+s.Real)
+			vlog("secret: injected bearer %s for %s", s.Name, r.Host)
+			return
+		}
 	}
 
-	auth := r.Header.Get("Authorization")
-	if auth == "Bearer "+s.Fake {
-		r.Header.Set("Authorization", "Bearer "+s.Real)
-		vlog("secret: injected %s for %s", s.Name, r.Host)
+	// Try git.
+	if s := findGitSecret(r.Host, r.URL.Path); s != nil {
+		r.Header.Set("Authorization", gitBasicAuth(s))
+		vlog("secret: injected git %s for %s%s", s.Name, r.Host, r.URL.Path)
 	}
 }
