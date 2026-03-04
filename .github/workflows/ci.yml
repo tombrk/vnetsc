@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build vnetsc
+        run: CGO_ENABLED=0 go build .
+
+      - name: Run container with vnetsc runtime
+        run: |
+          sudo mkdir -p /tmp/vnetsc-debug-logs
+          sudo podman run \
+            --runtime $PWD/vnetsc \
+            --runtime-flag=debug \
+            --runtime-flag=debug-log=/tmp/vnetsc-debug-logs/ \
+            -i \
+            alpine \
+            sh -c "
+              apk add --no-cache git &&
+              git clone https://github.com/tombrk/vnetsc.git /tmp/vnetsc &&
+              ls -la /tmp/vnetsc
+            "
+
+      - name: Print vnetsc debug logs
+        if: always()
+        run: |
+          echo "=== vnetsc debug logs ==="
+          sudo cat /tmp/vnetsc-debug-logs/* 2>/dev/null || echo "No logs found"
+
+      - name: tmate session if tests fail
+        if: failure() && github.event_name == 'workflow_dispatch'
+        uses: mxschmitt/action-tmate@v3
