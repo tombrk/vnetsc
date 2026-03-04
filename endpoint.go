@@ -2,45 +2,29 @@ package main
 
 import (
 	"fmt"
-	"io"
 
 	"gvisor.dev/gvisor/pkg/sentry/inet"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-// filteringEndpoint wraps a real tcpip.Endpoint. Only DNS (port 53) is allowed.
+// filteringEndpoint wraps a real tcpip.Endpoint. Denies all traffic.
 type filteringEndpoint struct {
 	tcpip.Endpoint
 }
 
 func (fe *filteringEndpoint) Connect(addr tcpip.FullAddress) tcpip.Error {
-	if addr.Port != 53 {
-		vlog("DENY Connect → %v:%d", addr.Addr, addr.Port)
-		return &tcpip.ErrConnectionRefused{}
-	}
-	vlog("Connect → %v:%d", addr.Addr, addr.Port)
-	return fe.Endpoint.Connect(addr)
+	vlog("DENY Connect → %v:%d", addr.Addr, addr.Port)
+	return &tcpip.ErrConnectionRefused{}
 }
 
 func (fe *filteringEndpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, tcpip.Error) {
-	if opts.To != nil && opts.To.Port != 53 {
-		vlog("DENY Write to=%v:%d", opts.To.Addr, opts.To.Port)
-		return 0, &tcpip.ErrConnectionRefused{}
-	}
-	return fe.Endpoint.Write(p, opts)
-}
-
-func (fe *filteringEndpoint) Read(w io.Writer, opts tcpip.ReadOptions) (tcpip.ReadResult, tcpip.Error) {
-	return fe.Endpoint.Read(w, opts)
+	vlog("DENY Write")
+	return 0, &tcpip.ErrConnectionRefused{}
 }
 
 func (fe *filteringEndpoint) Accept(peerAddr *tcpip.FullAddress) (tcpip.Endpoint, *waiter.Queue, tcpip.Error) {
-	ep, wq, err := fe.Endpoint.Accept(peerAddr)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &filteringEndpoint{Endpoint: ep}, wq, nil
+	return nil, nil, &tcpip.ErrConnectionRefused{}
 }
 
 // httpEndpoint wraps a TCP endpoint. On Connect(), it redirects the

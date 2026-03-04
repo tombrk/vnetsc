@@ -31,8 +31,7 @@ func (fp *filteringProvider) Socket(t *kernel.Task, stype linux.SockType, protoc
 
 		sm := getSockMirror(fd)
 
-		// For TCP sockets, use httpEndpoint so we can intercept port-80 flows.
-		// The actual port decision happens at Connect() time.
+		// TCP sockets → httpEndpoint (all TCP proxied).
 		if stype == linux.SOCK_STREAM {
 			if _, ok := sm.Endpoint.(*tcp.Endpoint); ok {
 				vlog("Socket(family=%d, type=STREAM, proto=%d) → httpEndpoint", sm.family, sm.protocol)
@@ -41,7 +40,14 @@ func (fp *filteringProvider) Socket(t *kernel.Task, stype linux.SockType, protoc
 			}
 		}
 
-		// Everything else: basic filtering (DNS allowed, rest denied at connect).
+		// UDP sockets → dnsEndpoint (forwards to 8.8.8.8, strips AAAA).
+		if stype == linux.SOCK_DGRAM {
+			vlog("Socket(family=%d, type=DGRAM, proto=%d) → dnsEndpoint", sm.family, sm.protocol)
+			sm.Endpoint = &dnsEndpoint{Endpoint: sm.Endpoint}
+			return fd, nil
+		}
+
+		// Everything else: deny all.
 		vlog("Socket(family=%d, type=%d, proto=%d) → filteringEndpoint", sm.family, sm.skType, sm.protocol)
 		sm.Endpoint = &filteringEndpoint{Endpoint: sm.Endpoint}
 		return fd, nil
